@@ -1,11 +1,21 @@
 package rs.fink.pds.spark;
 
 import org.apache.spark.sql.*;
+import org.apache.spark.sql.expressions.Window;
+import org.apache.spark.sql.expressions.WindowSpec;
+import org.apache.spark.sql.types.DataTypes;
+import org.apache.spark.sql.types.Metadata;
+import org.apache.spark.sql.types.StructField;
+import org.apache.spark.sql.types.StructType;
+
+import rs.fink.pds.spark.utils.ConfederationMapper;
+
 import org.apache.spark.api.java.JavaRDD;
 import org.apache.spark.api.java.JavaPairRDD;
 import org.apache.spark.api.java.function.*;
 import scala.Tuple2;
 import scala.Tuple3;
+
 
 import static org.apache.spark.sql.functions.*;
 
@@ -148,6 +158,83 @@ public class FootballAnalysis implements Serializable {
 	result.write().mode("overwrite").option("header", "true").csv("output/zad2_late_goals");
 }
 
+ //Najefikasnije reprezentacije po konfederacijama na SP 1970+
+ public static void zad3_WorldCupByConfed(SparkSession spark, Dataset<Row> resultsDF,
+		 									Dataset<Row> goalsDF) {
+	 System.out.println("\n========== ZADATAK 3: SP po konfederacijama ==========");
+	 
+	 StructType resultSchema = new StructType(new StructField[] {
+			    DataTypes.createStructField("Confederation", DataTypes.StringType, false),
+			    DataTypes.createStructField("Team", DataTypes.StringType, false),
+			    DataTypes.createStructField("WorldCupGoals", DataTypes.LongType, false),
+			    DataTypes.createStructField("FirstAppearanceYear", DataTypes.IntegerType, false),
+			    DataTypes.createStructField("LastAppearanceYear", DataTypes.IntegerType, false)
+	 });
+	 
+	// Filtriraj samo FIFA World Cup utakmice od 1970. (ukljucujuci kvalifikacije)
+	Dataset<Row> wcMatches = resultsDF
+			.filter(col("tournament").contains("FIFA World Cup"))
+			.withColumn("year", year(col("date")))
+			.filter(col("year").geq(1970));
+	System.out.println("World Cup utakmice od 1970: " + wcMatches.count());
+	// Spoji golove sa SP utakmicama
+	Dataset<Row> wcGoals = goalsDF
+			.withColumn("minute", col("minute").cast("int"))
+			.join(wcMatches,
+					goalsDF.col("date").equalTo(wcMatches.col("date"))
+					.and(goalsDF.col("home_team").equalTo(wcMatches.col("home_team")))
+					.and(goalsDF.col("away_team").equalTo(wcMatches.col("away_team"))),
+					"inner")
+			.filter(col("own_goal").equalTo("FALSE"));
+	System.out.println("Golovi na SP od 1970: " + wcGoals.count());
+	
+	// Ukupni golovi po timu na SP
+	Dataset<Row> teamGoals = wcGoals
+			.groupBy("team")
+			.agg(
+					count("*").as("WorldCupGoals"),
+					min(year(col("date"))).as("FirstAppearanceYear"),
+					max(year(col("date"))).as("LastAppearanceYear")
+			);
+	System.out.println("Timovi sa golovima na SP: " + teamGoals.count());
+	
+	// Dodaj konfederaciju
+
+	Dataset<Row> withConfed = teamGoals.map(new MapFunction<Row, Row>() {
+	    @Override
+	    public Row call(Row row) throws Exception {
+	        String team = row.getString(0);
+	        long goals = row.getLong(1);
+            int firstYear = row.getInt(2);
+            int lastYear = row.getInt(3);
+            
+	        String confed = ConfederationMapper.get(team);
+	        if ("UNKNOWN".equals(confed)) {
+	        	return null;
+	        }
+	        return RowFactory.create(confed, team, goals, firstYear, lastYear);
+	    }
+	}, Encoders.row(resultSchema)) 
+	.filter((FilterFunction<Row>) r -> r != null);
+	
+	// Najbolji tim po konfederaciji (window funkcija)
+	WindowSpec window = Window.partitionBy("Confederation")
+							.orderBy(col("WorldCupGoals").desc());
+	
+	Dataset<Row> ranked = withConfed
+			.withColumn("rank", row_number().over(window))
+			.filter(col("rank").equalTo(1))
+			.select("Confederation", "Team", "WorldCupGoals", 
+					"FirstAppearanceYear", "LastAppearanceYear")
+			.orderBy(col("WorldCupGoals").desc());
+	
+	System.out.println("Confederation,Team,WorldCupGoals,FirstAppearanceYear,LastAppearanceYear");
+	ranked.show(10, false);
+	ranked.write().mode("overwrite").option("header", "true").csv("output/zad3_worldcup_confed");
+	
+	System.out.println("\nRezultati sacuvani u: output/zad3_worldcup_confed/");
+}
+
  
  public static void main(String[] args) {
      SparkSession spark = SparkSession.builder()
@@ -177,6 +264,7 @@ public class FootballAnalysis implements Serializable {
      // Pokreni sve zadatke
      zad1_SerbiaAnalysis(resultsRDD);           // RDD + Map-Reduce
      zad2_LateGoals(spark, resultsDF, goalsDF); // DataFrame
+     zad3_WorldCupByConfed(spark, resultsDF, goalsDF);
      
      spark.stop();
      System.out.println("\nAnalysis finished");
