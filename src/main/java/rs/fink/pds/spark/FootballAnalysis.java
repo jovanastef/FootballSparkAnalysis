@@ -181,17 +181,24 @@ public class FootballAnalysis implements Serializable {
 	Dataset<Row> wcMatches = resultsDF
 			.filter(col("tournament").contains("FIFA World Cup"))
 			.withColumn("year", year(col("date")))
-			.filter(col("year").geq(1970));
+			.filter(col("year").geq(1970))
+			.select("date", "home_team", "away_team", "tournament");
 	System.out.println("World Cup utakmice od 1970: " + wcMatches.count());
 	// Spoji golove sa SP utakmicama
-	Dataset<Row> wcGoals = goalsDF
-			.withColumn("minute", col("minute").cast("int"))
+	Dataset<Row> goalsInt = goalsDF
+		    .withColumn("minute", col("minute").cast("int"))
+		    .filter(col("own_goal").equalTo("FALSE"));
+	Dataset<Row> wcGoals = goalsInt
 			.join(wcMatches,
-					goalsDF.col("date").equalTo(wcMatches.col("date"))
-					.and(goalsDF.col("home_team").equalTo(wcMatches.col("home_team")))
-					.and(goalsDF.col("away_team").equalTo(wcMatches.col("away_team"))),
+					goalsInt.col("date").equalTo(wcMatches.col("date"))
+					.and(goalsInt.col("home_team").equalTo(wcMatches.col("home_team")))
+					.and(goalsInt.col("away_team").equalTo(wcMatches.col("away_team"))),
 					"inner")
-			.filter(col("own_goal").equalTo("FALSE"));
+			.select(
+		            goalsInt.col("team"),
+		            wcMatches.col("date"),
+		            wcMatches.col("tournament")
+		        );
 	System.out.println("Golovi na SP od 1970: " + wcGoals.count());
 	
 	// Ukupni golovi po timu na SP
