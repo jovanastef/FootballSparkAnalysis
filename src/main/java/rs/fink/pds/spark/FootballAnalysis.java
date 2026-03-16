@@ -234,6 +234,111 @@ public class FootballAnalysis implements Serializable {
 	
 	System.out.println("\nRezultati sacuvani u: output/zad3_worldcup_confed/");
 }
+ 
+
+// Najduzi nizovi utakmica bez primljenog gola (nakon 1990)
+
+public static void zad4_CleanSheets(SparkSession spark, Dataset<Row> resultsDF) {
+  System.out.println("\n========== ZADATAK 4: Clean Sheet nizovi ==========");
+
+  // Filtriraj utakmice nakon 1990.
+  Dataset<Row> filtered = resultsDF
+      .filter(year(col("date")).geq(1990))
+      .filter(
+          col("tournament").contains("FIFA World Cup")
+          .or(col("tournament").contains("UEFA Euro"))
+      );
+  
+  System.out.println("Utakmice na SP/EP nakon 1990: " + filtered.count());
+  
+  // Timovi koji su igrali na SP ili EP (bilo kada)
+  Dataset<Row> majorTeams = resultsDF
+      .filter(
+          col("tournament").contains("FIFA World Cup")
+          .or(col("tournament").contains("UEFA Euro"))
+      )
+      .select(col("home_team").as("team"))
+      .union(resultsDF.select(col("away_team").as("team")))
+      .distinct();
+  
+  System.out.println("Timovi sa SP/EP: " + majorTeams.count());
+  
+  // Za svaki tim, da li je primio gol na svakoj utakmici
+  
+  Dataset<Row> teamResults = filtered
+      .select(
+          col("date"),
+          col("home_team"),
+          col("away_team"),
+          col("home_score").cast("int"),
+          col("away_score").cast("int")
+      )
+      .withColumn("home_clean", 
+          when(col("away_score").cast("int").equalTo(0), true).otherwise(false))
+      .withColumn("away_clean", 
+          when(col("home_score").cast("int").equalTo(0), true).otherwise(false));
+  
+  // jedan red po timu po utakmici
+  Dataset<Row> teamCleanHome = teamResults
+      .select(
+          col("date"),
+          col("home_team").as("team"),
+          col("home_clean").as("clean"),
+          col("away_team").as("opponent")
+      );
+  
+  Dataset<Row> teamCleanAway = teamResults
+      .select(
+          col("date"),
+          col("away_team").as("team"),
+          col("away_clean").as("clean"),
+          col("home_team").as("opponent")
+      );
+  
+  Dataset<Row> teamClean = teamCleanHome
+      .union(teamCleanAway)
+      .join(majorTeams, "team", "inner")
+      .orderBy("team", "date");
+  
+  System.out.println("Ukupno tim-utakmica zapisa: " + teamClean.count());
+  
+  
+  // privremen view za SQL upit
+  teamClean.createOrReplaceTempView("clean_sheets");
+  
+  // SQL za pronalazenje uzastopnih nizova
+  String sql = 
+      "WITH streaks AS (" +
+      "    SELECT team, date, clean, opponent, " +
+      "        SUM(CASE WHEN clean = false THEN 1 ELSE 0 END) " +
+      "            OVER (PARTITION BY team ORDER BY date) as grp " +
+      "    FROM clean_sheets " +
+      "), " +
+      "summary AS (" +
+      "    SELECT team, grp, COUNT(*) as len, " +
+      "        MIN(date) as start_d, MAX(date) as end_d, " +
+      "        MAX(CASE WHEN clean = false THEN opponent END) as broken " +
+      "    FROM streaks WHERE clean = true " +
+      "    GROUP BY team, grp " +
+      ") " +
+      "SELECT team as Team, len as CleanSheetStreak, " +
+      "    start_d as StartDate, end_d as EndDate, " +
+      "    broken as StreakBrokenBy " +
+      "FROM summary ORDER BY len DESC, team LIMIT 15";
+  
+  Dataset<Row> top = spark.sql(sql);
+  
+  System.out.println("\nTeam,CleanSheetStreak,StartDate,EndDate,StreakBrokenBy");
+  top.show(15, false);
+  
+  //Sacuvaj rezultate u CSV fajl
+  top.write()
+      .mode("overwrite")
+      .option("header", "true")
+      .csv("output/zad4_cleansheets");
+  
+  System.out.println("\nRezultati sacuvani u: output/zad4_cleansheets/");
+}
 
  
  public static void main(String[] args) {
@@ -265,6 +370,7 @@ public class FootballAnalysis implements Serializable {
      zad1_SerbiaAnalysis(resultsRDD);           // RDD + Map-Reduce
      zad2_LateGoals(spark, resultsDF, goalsDF); // DataFrame
      zad3_WorldCupByConfed(spark, resultsDF, goalsDF);
+     zad4_CleanSheets(spark, resultsDF);
      
      spark.stop();
      System.out.println("\nAnalysis finished");
