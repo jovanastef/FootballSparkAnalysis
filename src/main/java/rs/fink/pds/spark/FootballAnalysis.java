@@ -135,22 +135,28 @@ public class FootballAnalysis implements Serializable {
 			.agg(count("*").as("LateGoals"))
 			.filter(col("LateGoals").geq(4));
 	
-	// Spoj sa rezultatima za dodatne informacije
-	Dataset<Row> result = lateCount
-			.join(resultsDF, 
-					lateCount.col("date").equalTo(resultsDF.col("date"))
-					.and(lateCount.col("home_team").equalTo(resultsDF.col("home_team")))
-					.and(lateCount.col("away_team").equalTo(resultsDF.col("away_team"))),
+	// alias za dataframes
+	Dataset<Row> resultsAliased = resultsDF.alias("r");
+    Dataset<Row> lateCountAliased = lateCount.alias("lc");
+	
+    // Spoj sa rezultatima za dodatne informacije
+	Dataset<Row> result = lateCountAliased
+			.join(resultsAliased, 
+					lateCountAliased.col("date").equalTo(resultsAliased.col("date"))
+					.and(lateCountAliased.col("home_team").equalTo(resultsAliased.col("home_team")))
+					.and(lateCountAliased.col("away_team").equalTo(resultsAliased.col("away_team"))),
 					"inner")
-			.withColumn("TotalGoals", col("home_score").cast("int").plus(col("away_score").cast("int")))
+			//.withColumn("TotalGoals", col("home_score").cast("int").plus(col("away_score").cast("int")))
 			.select(
-					col("date").as("Date"),
-					col("home_team").as("HomeTeam"), 
-					col("away_team").as("AwayTeam"),
-					col("tournament").as("Tournament"),
-					col("LateGoals"),
-					col("TotalGoals")
-			)
+					resultsAliased.col("date").as("Date"),
+					resultsAliased.col("home_team").as("HomeTeam"), 
+					resultsAliased.col("away_team").as("AwayTeam"),
+					resultsAliased.col("tournament").as("Tournament"),
+					lateCountAliased.col("LateGoals"),
+					(resultsAliased.col("home_score").cast("int")
+			                .plus(resultsAliased.col("away_score").cast("int"))).as("TotalGoals")
+			        )
+			
 			.orderBy(col("LateGoals").desc(), col("Date").desc());
 	
 	System.out.println("Date,HomeTeam,AwayTeam,Tournament,LateGoals,TotalGoals");
@@ -353,7 +359,7 @@ public static void zad4_CleanSheets(SparkSession spark, Dataset<Row> resultsDF) 
      
      // Ucitavanje podataka
      String resultsPath = "dataset/results.csv";
-     String goalsPath = "dataset/goalcorers.csv";
+     String goalsPath = "dataset/goalscorers.csv";
      
      Dataset<Row> resultsDF = spark.read().option("header","true").csv(resultsPath);
      Dataset<Row> goalsDF = spark.read().option("header","true").csv(goalsPath);
