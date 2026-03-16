@@ -321,24 +321,18 @@ public static void zad4_CleanSheets(SparkSession spark, Dataset<Row> resultsDF) 
   
   // SQL za pronalazenje uzastopnih nizova
   String sql = 
-      "WITH streaks AS (" +
-      "    SELECT team, date, clean, opponent, " +
-      "        SUM(CASE WHEN clean = false THEN 1 ELSE 0 END) " +
-      "            OVER (PARTITION BY team ORDER BY date) as grp " +
-      "    FROM clean_sheets " +
-      "), " +
-      "summary AS (" +
-      "    SELECT team, grp, COUNT(*) as len, " +
-      "        MIN(date) as start_d, MAX(date) as end_d, " +
-      "        MAX(CASE WHEN clean = false THEN opponent END) as broken " +
-      "    FROM streaks WHERE clean = true " +
-      "    GROUP BY team, grp " +
-      ") " +
-      "SELECT team as Team, len as CleanSheetStreak, " +
-      "    start_d as StartDate, end_d as EndDate, " +
-      "    broken as StreakBrokenBy " +
-      "FROM summary ORDER BY len DESC, team LIMIT 15";
-  
+		  "WITH numbered AS (SELECT *, ROW_NUMBER() OVER (PARTITION BY team ORDER BY date) as rn FROM clean_sheets), " +
+			        "streaks AS (SELECT *, SUM(CASE WHEN clean = false THEN 1 ELSE 0 END) " +
+			        "               OVER (PARTITION BY team ORDER BY rn) as grp FROM numbered ), " +
+			        "clean_streaks AS (SELECT team, grp, COUNT(*) as len, MIN(date) as start_d, MAX(date) as end_d, " +
+			        "           MAX(rn) as max_rn FROM streaks WHERE clean = true GROUP BY team, grp), " +
+			        "next_match AS (SELECT s.team, s.rn, s.opponent FROM streaks s WHERE s.clean = false), " +
+			        "with_breaker AS (SELECT cs.team, cs.len, cs.start_d, cs.end_d, nm.opponent as broken " +
+			        "    FROM clean_streaks cs LEFT JOIN next_match nm " +
+			        "        ON cs.team = nm.team " +
+			        "        AND nm.rn = cs.max_rn + 1 ) " +
+			        "SELECT team as Team, len as CleanSheetStreak, start_d as StartDate, end_d as EndDate, " +
+			        "       broken as StreakBrokenBy FROM with_breaker ORDER BY len DESC, team LIMIT 15";
   Dataset<Row> top = spark.sql(sql);
   
   System.out.println("\nTeam,CleanSheetStreak,StartDate,EndDate,StreakBrokenBy");
