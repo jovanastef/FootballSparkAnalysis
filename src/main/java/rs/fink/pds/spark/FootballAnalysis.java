@@ -7,6 +7,8 @@ import org.apache.spark.api.java.function.*;
 import scala.Tuple2;
 import scala.Tuple3;
 
+import static org.apache.spark.sql.functions.*;
+
 import java.io.Serializable;
 import java.util.*;
 
@@ -102,6 +104,51 @@ public class FootballAnalysis implements Serializable {
      }
  }
  
+ 
+ //Utakmice sa 4+ gola nakon 60'
+ 
+ public static void zad2_LateGoals(SparkSession spark, Dataset<Row> resultsDF, 
+         							Dataset<Row> goalsDF) {
+	 System.out.println("\n========== ZADATAK 2: golovi 60'+ ==========");
+
+	// Eksplicitna konverzija minute u int
+	Dataset<Row> goalsInt = goalsDF.withColumn("minute", col("minute").cast("int"));
+
+	// Filtriraj golove nakon 60' (iskljuci autogolove)
+	Dataset<Row> late = goalsInt
+			.filter(col("minute").geq(60))
+			.filter(col("own_goal").equalTo("FALSE"));
+	
+	// Grupisi po utakmici i prebroj kasne golove
+	Dataset<Row> lateCount = late
+			.groupBy("date", "home_team", "away_team")
+			.agg(count("*").as("LateGoals"))
+			.filter(col("LateGoals").geq(4));
+	
+	// Spoj sa rezultatima za dodatne informacije
+	Dataset<Row> result = lateCount
+			.join(resultsDF, 
+					lateCount.col("date").equalTo(resultsDF.col("date"))
+					.and(lateCount.col("home_team").equalTo(resultsDF.col("home_team")))
+					.and(lateCount.col("away_team").equalTo(resultsDF.col("away_team"))),
+					"inner")
+			.withColumn("TotalGoals", col("home_score").cast("int").plus(col("away_score").cast("int")))
+			.select(
+					col("date").as("Date"),
+					col("home_team").as("HomeTeam"), 
+					col("away_team").as("AwayTeam"),
+					col("tournament").as("Tournament"),
+					col("LateGoals"),
+					col("TotalGoals")
+			)
+			.orderBy(col("LateGoals").desc(), col("Date").desc());
+	
+	System.out.println("Date,HomeTeam,AwayTeam,Tournament,LateGoals,TotalGoals");
+	result.show(30, false);
+	result.write().mode("overwrite").option("header", "true").csv("output/zad2_late_goals");
+}
+
+ 
  public static void main(String[] args) {
      SparkSession spark = SparkSession.builder()
          .appName("FootballAnalysis")
@@ -129,6 +176,7 @@ public class FootballAnalysis implements Serializable {
      
      // Pokreni sve zadatke
      zad1_SerbiaAnalysis(resultsRDD);           // RDD + Map-Reduce
+     zad2_LateGoals(spark, resultsDF, goalsDF); // DataFrame
      
      spark.stop();
      System.out.println("\nAnalysis finished");
